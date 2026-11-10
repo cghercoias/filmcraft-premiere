@@ -38,8 +38,8 @@ jobs:
         if: matrix.job.os == 'ubuntu-latest'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libvulkan-dev libwayland-dev libx11-xcb-dev pkg-config
-
+          sudo apt-get install -y libvulkan-dev libwayland-dev libx11-xcb-dev pkg-config libasound2-dev libudev-dev
+          
       - name: Build Binary
         run: cargo build --release --target ${{ matrix.job.target }} -p filmcraft
 
