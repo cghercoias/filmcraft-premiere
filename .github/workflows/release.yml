@@ -1,53 +1,71 @@
-name: Release
+name: Personal Fork Release
 
 on:
   push:
-    branches: [release]
+    branches: [main, release]
   workflow_dispatch:
-    inputs:
-      version:
-        description: "Version override for a test run, e.g. 0.2.0-rc.1 (empty: Cargo.toml)"
-        type: string
-        default: ""
 
 permissions:
   contents: write
-  packages: write
-
-concurrency:
-  group: release-${{ github.ref }}
-  cancel-in-progress: false
 
 jobs:
-  # Regenerates contributors/contributors.json for the release commit; every build bundles it.
-  credits:
-    permissions:
-      contents: read
-      pull-requests: read
-    uses: storytold/craft-common-actions/.github/workflows/refresh-contributors.yml@main
-  release:
-    needs: credits
-    # Intentionally tracked at @main (not SHA-pinned) so org-wide CI improvements, security fixes, and build optimizations propagate without PR churn across all craftapp repos.
-    uses: storytold/craft-common-actions/.github/workflows/release.yml@main
-    with:
-      app-name: filmcraft
-      app-title: FilmCraft
-      craft-fonts-ref: b076417b5880bd4154bd22f00695b1d28c6bea83
-      version: ${{ inputs.version }}
-      contributors-artifact: ${{ needs.credits.outputs.artifact-name }}
-    secrets:
-      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-      KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
-      APPLE_ID: ${{ secrets.APPLE_ID }}
-      APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-      WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
-      WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
-      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-      AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
-      AZURE_SIGNING_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
-      AZURE_SIGNING_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
-      AZURE_CERT_PROFILE: ${{ secrets.AZURE_CERT_PROFILE }}
-      LINUX_SIGNING_KEY: ${{ secrets.LINUX_SIGNING_KEY }}
+  build:
+    name: Build for ${{ matrix.job.target }}
+    runs-on: ${{ matrix.job.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        job:
+          - { os: ubuntu-latest,  target: x86_64-unknown-linux-gnu, exe: filmcraft,     asset: filmcraft-linux-x86_64 }
+          - { os: macos-latest,   target: aarch64-apple-darwin,      exe: filmcraft,     asset: filmcraft-macos-apple-silicon }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc,    exe: filmcraft.exe, asset: filmcraft-windows-x64 }
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.job.target }}
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.job.target }}
+
+      - name: Install Linux Dependencies
+        if: matrix.job.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libvulkan-dev libwayland-dev libx11-xcb-dev pkg-config
+
+      - name: Build Binary
+        run: cargo build --release --target ${{ matrix.job.target }} -p filmcraft
+
+      - name: Package Binary (Unix)
+        if: matrix.job.os != 'windows-latest'
+        run: |
+          cd target/${{ matrix.job.target }}/release
+          tar -czf ../../../${{ matrix.job.asset }}.tar.gz ${{ matrix.job.exe }}
+          cd ../../..
+
+      - name: Package Binary (Windows)
+        if: matrix.job.os == 'windows-latest'
+        run: |
+          cd target/${{ matrix.job.target }}/release
+          Compress-Archive -Path ${{ matrix.job.exe }} -DestinationPath ../../../${{ matrix.job.asset }}.zip
+          cd ../../..
+
+      - name: Upload Artifacts to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: personal-release-${{ github.sha }}
+          name: "Fork Build: ${{ github.sha }}"
+          draft: false
+          prerelease: true
+          files: |
+            filmcraft-*.tar.gz
+            filmcraft-*.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
